@@ -11,7 +11,7 @@ import (
 	"github.com/jasontconnell/imgorg/process"
 )
 
-const imageExtensions string = "jpg,jpeg,gif,bmp,png,psd,tif,svg"
+const imageExtensions string = "jpg,jpeg,gif,bmp,png,psd,tif,svg,tga"
 
 func main() {
 	base := flag.String("base", "", "source folder")
@@ -20,11 +20,19 @@ func main() {
 	exts := flag.String("exts", "", "image extensions")
 	roots := flag.String("roots", "", "csv of root organization folders")
 	ignores := flag.String("ignore", "", "csv of folders to ignore")
-	workers := flag.Int("workers", 3, "number of workers")
+	fmap := flag.String("map", "", "map folders to other folders")
+	workers := flag.Int("workers", 20, "number of workers")
+	dryrun := flag.Bool("dryrun", false, "just output the files and their new locations")
+	delsrc := flag.Bool("delete", false, "specify this to also deleted the source files after copying")
+	verbose := flag.Bool("verbose", false, "specify this to see every move imgorg makes")
 	flag.Parse()
 
 	start := time.Now()
 	log.SetOutput(os.Stdout)
+
+	if *dryrun {
+		log.Println("**************** dry run ****************")
+	}
 
 	if *exts == "" {
 		*exts = imageExtensions
@@ -54,23 +62,49 @@ func main() {
 		paths = []string{*base}
 	}
 
-	files, err := process.Read(paths, rmap, extmap, imap, *workers)
+	fm := make(map[string]string)
+	for _, s := range strings.Split(*fmap, ",") {
+		vs := strings.Split(s, "=")
+		if len(vs) == 2 {
+			k, v := strings.ToLower(vs[0]), vs[1]
+			fm[k] = v
+		}
+	}
+
+	job := process.ImgOrgJob{
+		Paths:   paths,
+		Roots:   rmap,
+		Mapped:  fm,
+		Exts:    extmap,
+		Ignore:  imap,
+		Workers: *workers,
+		DryRun:  *dryrun,
+		Delete:  *delsrc,
+		Verbose: *verbose,
+	}
+
+	dirs, files, read, err := process.Read(job)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	err = process.Write(*dst, files, *workers)
+	written, err := process.Write(*dst, files, job)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	log.Println("finished.", time.Since(start))
+	if job.Delete {
+		process.Delete(files, job)
+		process.ClearEmptyDirectories(dirs, job)
+	}
+
+	log.Println("finished. read:", read, "wrote:", written, time.Since(start))
 }
 
 func mapStrings(strs []string) map[string]string {
 	m := make(map[string]string)
 	for _, s := range strs {
-		m[s] = s
+		m[strings.ToLower(s)] = s
 	}
 	return m
 }

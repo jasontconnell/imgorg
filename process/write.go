@@ -8,11 +8,12 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	"github.com/jasontconnell/imgorg/data"
 )
 
-func Write(dst string, list []data.File, chunksize int) error {
+func Write(dst string, list []data.File, job ImgOrgJob) (int64, error) {
 	byhash := make(map[string][]data.File)
 	for _, f := range list {
 		byhash[f.Hash] = append(byhash[f.Hash], f)
@@ -23,67 +24,97 @@ func Write(dst string, list []data.File, chunksize int) error {
 		grouped = append(grouped, v)
 	}
 
-	chunks := len(grouped) / chunksize
-	if len(grouped)%chunksize != 0 {
+	chunks := len(grouped) / job.Workers
+	if len(grouped)%job.Workers != 0 {
 		chunks++
 	}
 
+	var written int64
+	msgs := make(chan string, len(list))
 	var wg sync.WaitGroup
 	wg.Add(chunks)
 	for i := 0; i < chunks; i++ {
-		start, end := i*chunksize, (i+1)*chunksize
+		start, end := i*job.Workers, (i+1)*job.Workers
 		if end > len(grouped) {
 			end = len(grouped)
 		}
 
 		go func(dst string, files [][]data.File) {
 			for _, f := range files {
-				handleFiles(dst, f)
+				w := handleFiles(dst, f, job, msgs)
+				atomic.AddInt64(&written, w)
 			}
 			wg.Done()
 		}(dst, grouped[start:end])
 	}
 
 	wg.Wait()
+	close(msgs)
 
-	return nil
+	if job.Verbose || job.DryRun {
+		for msg := range msgs {
+			fmt.Println(msg)
+		}
+	}
+
+	return written, nil
 }
 
 // handles files with the same hash
-func handleFiles(dst string, files []data.File) {
+func handleFiles(dst string, files []data.File, job ImgOrgJob, msgs chan string) int64 {
 	selectedFiles := pickFiles(files)
 	if len(selectedFiles) == 0 {
-		return
+		return 0
 	}
+	var bytesWritten int64
 
 	for _, selected := range selectedFiles {
-		timedir := GetFolderFormat(selected.Mod)
+		timedir := GetShortDateFormat(selected.Mod)
 
-		var root string = selected.Root
-		if root == "" {
-			root = timedir
+		var roots []string = selected.Roots
+		hasRoots := true
+		if len(roots) == 0 {
+			roots = []string{timedir}
+			hasRoots = false
 		}
 
-		var sub string = selected.Sub
-		if sub == root {
-			sub = ""
+		absdir := filepath.Join(dst)
+		if hasRoots {
+			for _, r := range roots {
+				absdir = filepath.Join(absdir, r)
+			}
+			absdir = filepath.Join(absdir, selected.Sub)
+		} else {
+			// if it doesn't have roots or is mapped, mapped will be blank
+			// and filepath.Join can work with a blank.
+			absdir = filepath.Join(absdir, selected.Mapped, timedir)
 		}
-		absdir := filepath.Join(dst, root, sub)
 
 		srcPath := selected.Path
 		destPath := filepath.Join(absdir, selected.Name)
 
-		log.Println("copying from", srcPath, "to", destPath)
+		if job.DryRun {
+			msg := fmt.Sprintf(DryRunCopyMessage, srcPath, destPath, selected.Roots, selected.Mapped)
+			msgs <- msg
+			continue
+		}
 
-		_, err := os.Stat(absdir)
+		// check if file exists, if not, create a hash based folder for it
+		_, err := os.Stat(destPath)
+		if err == nil {
+			absdir = filepath.Join(absdir, string(selected.Hash[:10]))
+			destPath = filepath.Join(absdir, selected.Name)
+		}
+
+		_, err = os.Stat(absdir)
 		if os.IsNotExist(err) {
 			err := os.MkdirAll(absdir, os.ModePerm)
 			if err != nil {
 				log.Println("couldn't make dir", absdir)
-				return
+				return 0
 			}
 		} else if err != nil {
-			log.Println("other err occurred ", err)
+			log.Println("other err occurred ", absdir, err)
 		}
 
 		destFile, err := os.Create(destPath)
@@ -100,15 +131,26 @@ func handleFiles(dst string, files []data.File) {
 		}
 		defer srcFile.Close()
 
-		_, err = io.Copy(destFile, srcFile)
+		w, err := io.Copy(destFile, srcFile)
 		if err != nil {
-			log.Println("couldn't copy contents "+selected.Path, "to", destPath, err)
+			log.Println("couldn't copy contents", srcPath, "to", destPath, err)
 			continue
 		}
 
-		log.Println("copied", selected.Path, "to", destPath, ". pretend deleting.")
-		log.Println("os.Remove(", srcFile, ")")
+		bytesWritten += w
+
+		err = os.Chtimes(destPath, selected.Mod, selected.Mod)
+		if err != nil {
+			log.Println("couldn't update modified time for", destPath)
+			continue
+		}
+
+		if job.Verbose {
+			msg := fmt.Sprintf(CopyMessage, srcPath, destPath, selected.Roots, selected.Mapped, true, w)
+			msgs <- msg
+		}
 	}
+	return bytesWritten
 }
 
 func pickFiles(files []data.File) []data.File {
@@ -124,11 +166,17 @@ func pickFiles(files []data.File) []data.File {
 	for _, f := range files {
 		af, isAdded := added[f.Name]
 
+		// hash is the same or it wouldn't be in this list
+		// if the mod time is the same it was copied to another location
+		// and should be skipped, we can assume it's a copy.
+		if f.Mod.Equal(af.Mod) {
+			continue
+		}
+
 		toAdd := f.Copy()
 		if isAdded {
 			toAdd.Name = fmt.Sprintf("%s_%s", f.Mod.Format(DateFormat), f.Name)
-			toAdd.Root = af.Root // copy to same location
-			toAdd.Sub = af.Sub
+			toAdd.Roots = af.Roots // copy to same location
 		}
 		added[toAdd.Name] = toAdd
 	}
