@@ -6,13 +6,17 @@ So, there might be an image named `jason_drunk.jpg` that was copied 3 or 4 times
 
 `imgorg`'s job, if it so chooses to accept, is to find all instances of `jason_drunk.jpg` as they are strewn about in filesystem land (matching up by content hash), and copy them all to a folder structure with year/month/day/ following its modified time, and then some folders indicating where it found it. This can be a big set of nested folders but it can later be hand organized, knowing that `imgorg` did the [grunt work](https://www.jasontconnell.com/2018/08/26/grunt-work-principle).
 
-As of this writing, it will only copy and leave the originals alone. Because it's still in dev and I haven't perfected the folder structure yet.
+~~As of this writing, it will only copy and leave the originals alone. Because it's still in dev and I haven't perfected the folder structure yet.~~
+
+This can now delete files and folders with the -delete flag.
 
 ## Usage
 
 ```
 imgorg -base c:\base\dir -sub "sub1,sub2" -dst c:\out\dir -roots "albums,pictures" -ignore _vti_cnf -workers 10
 ```
+
+### All Flags
 
 - base is the base folder to search.
 - sub is for when you want to search subfolders instead. In my case, they are all stored on my Google Drive, but I want to search a few subfolders in there rather than searching the entire Google Drive folder.
@@ -25,6 +29,8 @@ imgorg -base c:\base\dir -sub "sub1,sub2" -dst c:\out\dir -roots "albums,picture
 - delete will delete the src files after copying
 - verbose will output all the things. Well, all the things I remembered to output when this flag is set.
 
+
+### Live Example
 Here's a live example in powershell of how I call `imgorg`.
 
 ```
@@ -45,3 +51,5 @@ go build
 And when you're done, you hopefully see something like this
 
 `2021/02/20 01:26:02 finished. read: 14737534545 wrote: 14660556237 1m30.7191773s`
+
+My Google Drive folder is syncing as I type this, and all of my images are much more organized!

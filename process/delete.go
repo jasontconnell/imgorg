@@ -38,6 +38,7 @@ func ClearEmptyDirectories(list []data.Dir, job ImgOrgJob) {
 				log.Println("Removing (fake)", dir.Path)
 				continue
 			}
+
 			err = os.Remove(dir.Path)
 			if err != nil {
 				log.Println("couldn't remove directory", dir, err)
