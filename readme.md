@@ -53,3 +53,5 @@ And when you're done, you hopefully see something like this
 `2021/02/20 01:26:02 finished. read: 14737534545 wrote: 14660556237 1m30.7191773s`
 
 My Google Drive folder is syncing as I type this, and all of my images are much more organized!
+
+Use at your own risk!  Although, please let me know if you use it and it helps! I love to hear it.
