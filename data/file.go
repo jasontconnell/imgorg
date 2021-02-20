@@ -8,7 +8,6 @@ type Dir struct {
 	Name   string
 	Path   string
 	Mapped string
-	Parts  []string
 	Roots  []string
 }
 
@@ -27,13 +26,14 @@ func (f File) Copy() File {
 	rc := make([]string, len(f.Roots))
 	copy(rc, f.Roots)
 	nf := File{
-		Name:  f.Name,
-		Path:  f.Path,
-		Sub:   f.Sub,
-		Hash:  f.Hash,
-		Mod:   f.Mod,
-		Size:  f.Size,
-		Roots: rc,
+		Name:   f.Name,
+		Path:   f.Path,
+		Sub:    f.Sub,
+		Hash:   f.Hash,
+		Mod:    f.Mod,
+		Size:   f.Size,
+		Roots:  rc,
+		Mapped: f.Mapped,
 	}
 	return nf
 }

@@ -30,7 +30,7 @@ func Write(dst string, list []data.File, job ImgOrgJob) (int64, error) {
 	}
 
 	var written int64
-	msgs := make(chan string, len(list))
+	msgs := make(chan string, 1000000)
 	var wg sync.WaitGroup
 	wg.Add(chunks)
 	for i := 0; i < chunks; i++ {
@@ -62,7 +62,7 @@ func Write(dst string, list []data.File, job ImgOrgJob) (int64, error) {
 
 // handles files with the same hash
 func handleFiles(dst string, files []data.File, job ImgOrgJob, msgs chan string) int64 {
-	selectedFiles := pickFiles(files)
+	selectedFiles := pickFiles(files, job, msgs)
 	if len(selectedFiles) == 0 {
 		return 0
 	}
@@ -153,30 +153,71 @@ func handleFiles(dst string, files []data.File, job ImgOrgJob, msgs chan string)
 	return bytesWritten
 }
 
-func pickFiles(files []data.File) []data.File {
+func pickFiles(files []data.File, job ImgOrgJob, msgs chan string) []data.File {
 	if len(files) <= 1 {
 		return files
 	}
 
 	sort.Slice(files, func(i, j int) bool {
-		return files[i].Mod.After(files[j].Mod)
+		mappedi := files[i].Mapped
+		mappedj := files[j].Mapped
+
+		rootsi := files[i].Roots
+		rootsj := files[j].Roots
+
+		mapsort := false
+		rootsort := false
+		isLess := false
+		if len(rootsi) > len(rootsj) {
+			isLess = true
+			rootsort = true
+		}
+
+		if !rootsort && mappedi != mappedj {
+			mapsort = true
+			isLess = mappedi != "" && mappedj == ""
+		}
+
+		if !mapsort {
+			isLess = files[i].Mod.After(files[j].Mod)
+		}
+
+		return isLess
 	})
 
 	added := make(map[string]data.File)
 	for _, f := range files {
 		af, isAdded := added[f.Name]
 
+		if job.Verbose {
+			msgs <- fmt.Sprintf("handling file %s. Is added is %t by file in path %s", f.Path, isAdded, af.Path)
+		}
+
 		// hash is the same or it wouldn't be in this list
 		// if the mod time is the same it was copied to another location
 		// and should be skipped, we can assume it's a copy.
 		if f.Mod.Equal(af.Mod) {
+			if job.Verbose {
+				msgs <- fmt.Sprintf("file %s is the same mod time as already added %s", f.Path, af.Path)
+			}
 			continue
 		}
 
 		toAdd := f.Copy()
 		if isAdded {
 			toAdd.Name = fmt.Sprintf("%s_%s", f.Mod.Format(DateFormat), f.Name)
-			toAdd.Roots = af.Roots // copy to same location
+			// copy to same location
+			toAdd.Roots = af.Roots
+			toAdd.Mapped = af.Mapped
+			toAdd.Sub = af.Sub
+
+			if job.Verbose {
+				msgs <- fmt.Sprintf("file %s copying attributes from %s\nroots: %v\nmapped: %s\nsub:%s", f.Path, af.Path, af.Roots, af.Mapped, af.Sub)
+			}
+		}
+
+		if job.Verbose {
+			msgs <- fmt.Sprintf("adding file %s with attributes\nroots: %v\nmapped: %s\nsub:%s", toAdd.Path, toAdd.Roots, toAdd.Mapped, toAdd.Sub)
 		}
 		added[toAdd.Name] = toAdd
 	}

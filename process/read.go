@@ -31,38 +31,54 @@ func Read(job ImgOrgJob) ([]data.Dir, []data.File, int64, error) {
 				log.Println("error from fp walk", f, err)
 				return err
 			}
+
+			if !info.IsDir() {
+				return nil
+			}
+
 			lname := strings.ToLower(info.Name())
-			if _, ok := job.Ignore[lname]; info.IsDir() && !ok {
-				var mapped string
-				var rootlist []string
-
-				parts := strings.Split(strings.TrimPrefix(f, filepath.VolumeName(f)), string(filepath.Separator))
-				for _, p := range parts {
-					lpart := strings.ToLower(p)
-					if r, ok := job.Roots[lpart]; ok {
-						rootlist = append(rootlist, r)
-					}
-
-					if s, ok := job.Mapped[strings.ToLower(p)]; ok {
-						mapped = s
-					}
-				}
-
-				d := data.Dir{Name: info.Name(), Path: f, Mapped: mapped, Parts: parts, Roots: rootlist}
-				list = append(list, d)
-			} else if ok {
+			if _, ok := job.Ignore[lname]; ok {
 				return filepath.SkipDir
 			}
+
+			var mapped string
+			var rootlist []string
+
+			lpath := strings.ToLower(f)
+			parts := strings.Split(strings.TrimPrefix(lpath, filepath.VolumeName(f)), string(filepath.Separator))
+			for _, p := range parts {
+				if r, ok := job.Roots[p]; ok {
+					rootlist = append(rootlist, r)
+				}
+
+				// get first mapped folder
+				if s, ok := job.Mapped[p]; mapped == "" && ok {
+					mapped = s
+				}
+			}
+
+			d := data.Dir{Name: info.Name(), Path: f, Mapped: mapped, Roots: rootlist}
+			list = append(list, d)
+
 			return nil
 		})
 	}
 
-	files, written, err := readFiles(list, job)
+	msgs := make(chan string, 1000000)
+
+	files, written, err := readFiles(list, job, msgs)
+	close(msgs)
+
+	if job.Verbose {
+		for msg := range msgs {
+			log.Println(msg)
+		}
+	}
 
 	return list, files, written, err
 }
 
-func readFiles(dirs []data.Dir, job ImgOrgJob) ([]data.File, int64, error) {
+func readFiles(dirs []data.Dir, job ImgOrgJob, msgs chan string) ([]data.File, int64, error) {
 	var wg sync.WaitGroup
 	chdir := make(chan data.Dir, len(dirs))
 	chfiles := make(chan *data.File, 100000)
@@ -86,6 +102,7 @@ func readFiles(dirs []data.Dir, job ImgOrgJob) ([]data.File, int64, error) {
 					if dir.Path == "" {
 						continue
 					}
+
 					entries, err := os.ReadDir(dir.Path)
 					if err != nil {
 						log.Println("couldn't read dir", dir.Path, len(chpaths), len(chfile))
@@ -100,6 +117,7 @@ func readFiles(dirs []data.Dir, job ImgOrgJob) ([]data.File, int64, error) {
 						if entry.IsDir() {
 							continue
 						}
+
 						ext := strings.ToLower(filepath.Ext(entry.Name()))
 						if _, ok := exts[ext]; !ok {
 							continue
@@ -122,6 +140,10 @@ func readFiles(dirs []data.Dir, job ImgOrgJob) ([]data.File, int64, error) {
 						}
 
 						atomic.AddInt64(&size, file.Size)
+
+						if job.Verbose {
+							msgs <- fmt.Sprintf("adding file %s with roots %v and mapped %s and sub %s", file.Path, file.Roots, file.Mapped, file.Sub)
+						}
 
 						chfile <- file
 					}
